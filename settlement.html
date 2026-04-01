@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>SplitSmart – Settlement</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <button class="theme-toggle" id="themeToggle" title="Toggle dark mode">
+    <span class="toggle-icon">☽</span>
+  </button>
+
+  <div class="page-wrapper">
+    <!-- Step Indicator -->
+    <div class="stepper">
+      <div class="step done"><span class="step-num">✓</span><span class="step-label">Members</span></div>
+      <div class="step-line active"></div>
+      <div class="step done"><span class="step-num">✓</span><span class="step-label">Expenses</span></div>
+      <div class="step-line active"></div>
+      <div class="step active"><span class="step-num">3</span><span class="step-label">Settlement</span></div>
+    </div>
+
+    <header class="page-header">
+      <h2 class="page-title">Settlement Summary</h2>
+      <p class="page-sub">Here's how to settle up fairly.</p>
+    </header>
+
+    <!-- Summary Stats Row -->
+    <div class="stats-row" id="statsRow">
+      <!-- JS fills -->
+    </div>
+
+    <!-- Per-Person Breakdown -->
+    <div class="card">
+      <div class="card-header">
+        <h2>Per Person Breakdown</h2>
+        <p>What each member paid vs. their fair share.</p>
+      </div>
+      <div id="breakdownGrid" class="breakdown-grid">
+        <!-- JS fills -->
+      </div>
+    </div>
+
+    <!-- Settlement Transactions -->
+    <div class="card card--settlement">
+      <div class="card-header">
+        <h2>Who Pays Whom</h2>
+        <p id="settlementSub"></p>
+      </div>
+      <div id="settlementList" class="settlement-list">
+        <!-- JS fills -->
+      </div>
+    </div>
+
+    <!-- Expense Log -->
+    <div class="card card--log">
+      <details>
+        <summary class="log-summary">View full expense log</summary>
+        <table class="expense-table" id="logTable">
+          <thead>
+            <tr><th>#</th><th>Description</th><th>Paid by</th><th>Amount</th></tr>
+          </thead>
+          <tbody id="logBody"></tbody>
+        </table>
+      </details>
+    </div>
+
+    <!-- Navigation -->
+    <div class="nav-bar">
+      <button class="btn btn-ghost" onclick="window.location.href='expenses.html'">← Back</button>
+      <button class="btn btn-reset" id="resetBtn">Start New Split</button>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+  <script>
+    // ─── Settlement Page Logic ────────────────────────────────────────
+    initStorage();
+    guardPage('settlement');
+
+    const members  = getMembers();
+    const expenses = getExpenses();
+    const n        = members.length;
+    const total    = expenses.reduce((s, e) => s + e.amount, 0);
+    const share    = total / n;
+
+    // ── 1. Build balance map ─────────────────────────────────────
+    const paid = {}; // total paid by each member
+    members.forEach(m => paid[m] = 0);
+    expenses.forEach(e => { paid[e.paidBy] += e.amount; });
+
+    const balance = {}; // positive = owed to them, negative = they owe
+    members.forEach(m => { balance[m] = +(paid[m] - share).toFixed(2); });
+
+    // ── 2. Stats Row ─────────────────────────────────────────────
+    document.getElementById('statsRow').innerHTML = `
+      <div class="stat-card">
+        <div class="stat-label">Total Spent</div>
+        <div class="stat-value">₹${fmt(total)}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Per Person</div>
+        <div class="stat-value">₹${fmt(share)}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Members</div>
+        <div class="stat-value">${n}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Expenses</div>
+        <div class="stat-value">${expenses.length}</div>
+      </div>
+    `;
+
+    // ── 3. Breakdown Grid ─────────────────────────────────────────
+    document.getElementById('breakdownGrid').innerHTML = members.map(m => {
+      const b = balance[m];
+      const cls = b > 0.005 ? 'balance-pos' : b < -0.005 ? 'balance-neg' : 'balance-zero';
+      const tag = b > 0.005 ? `Receives ₹${fmt(b)}` : b < -0.005 ? `Owes ₹${fmt(Math.abs(b))}` : 'All settled ✓';
+      return `
+        <div class="breakdown-card ${cls}">
+          <div class="bd-avatar">${m.charAt(0).toUpperCase()}</div>
+          <div class="bd-info">
+            <div class="bd-name">${escHtml(m)}</div>
+            <div class="bd-paid">Paid ₹${fmt(paid[m])}</div>
+            <div class="bd-share">Share ₹${fmt(share)}</div>
+          </div>
+          <div class="bd-status">${tag}</div>
+        </div>
+      `;
+    }).join('');
+
+    // ── 4. Settlement Algorithm (greedy) ──────────────────────────
+    // Separate creditors (positive balance) and debtors (negative balance)
+    const creditors = members.filter(m => balance[m] > 0.005).map(m => ({ name: m, amt: balance[m] }));
+    const debtors   = members.filter(m => balance[m] < -0.005).map(m => ({ name: m, amt: -balance[m] }));
+
+    const transactions = [];
+    let ci = 0, di = 0;
+
+    while (ci < creditors.length && di < debtors.length) {
+      const settle = Math.min(creditors[ci].amt, debtors[di].amt);
+      transactions.push({ from: debtors[di].name, to: creditors[ci].name, amt: +settle.toFixed(2) });
+      creditors[ci].amt -= settle;
+      debtors[di].amt   -= settle;
+      if (creditors[ci].amt < 0.01) ci++;
+      if (debtors[di].amt   < 0.01) di++;
+    }
+
+    // ── 5. Render Settlement ──────────────────────────────────────
+    const settlementList = document.getElementById('settlementList');
+    const subEl = document.getElementById('settlementSub');
+
+    if (transactions.length === 0) {
+      subEl.textContent = 'Everyone is perfectly settled!';
+      settlementList.innerHTML = `
+        <div class="all-settled">
+          <div class="settled-icon">🎉</div>
+          <p>No payments needed — all balanced!</p>
+        </div>`;
+    } else {
+      subEl.textContent = `${transactions.length} payment${transactions.length !== 1 ? 's' : ''} needed to settle all debts.`;
+      settlementList.innerHTML = transactions.map((t, i) => `
+        <div class="txn animate-in" style="animation-delay:${i * 80}ms">
+          <div class="txn-from">
+            <div class="txn-avatar txn-avatar--from">${t.from.charAt(0).toUpperCase()}</div>
+            <span>${escHtml(t.from)}</span>
+          </div>
+          <div class="txn-arrow">
+            <span class="txn-amount">₹${fmt(t.amt)}</span>
+            <div class="arrow-line"><div class="arrow-head">▶</div></div>
+          </div>
+          <div class="txn-to">
+            <div class="txn-avatar txn-avatar--to">${t.to.charAt(0).toUpperCase()}</div>
+            <span>${escHtml(t.to)}</span>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    // ── 6. Expense Log ────────────────────────────────────────────
+    document.getElementById('logBody').innerHTML = expenses.map((e, i) => `
+      <tr>
+        <td class="td-num">${i + 1}</td>
+        <td class="td-desc">${escHtml(e.description)}</td>
+        <td><span class="payer-tag">${escHtml(e.paidBy)}</span></td>
+        <td class="td-amount">₹${fmt(e.amount)}</td>
+      </tr>
+    `).join('');
+
+    // ── 7. Reset ──────────────────────────────────────────────────
+    document.getElementById('resetBtn').addEventListener('click', () => {
+      if (confirm('Start a new split? All current data will be cleared.')) {
+        sessionStorage.removeItem('members');
+        sessionStorage.removeItem('expenses');
+        window.location.href = 'index.html';
+      }
+    });
+  </script>
+</body>
+</html>

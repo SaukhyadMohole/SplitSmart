@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>SplitSmart – Members</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- Dark Mode Toggle -->
+  <button class="theme-toggle" id="themeToggle" title="Toggle dark mode">
+    <span class="toggle-icon">☽</span>
+  </button>
+
+  <div class="page-wrapper">
+    <!-- Step Indicator -->
+    <div class="stepper">
+      <div class="step active"><span class="step-num">1</span><span class="step-label">Members</span></div>
+      <div class="step-line"></div>
+      <div class="step"><span class="step-num">2</span><span class="step-label">Expenses</span></div>
+      <div class="step-line"></div>
+      <div class="step"><span class="step-num">3</span><span class="step-label">Settlement</span></div>
+    </div>
+
+    <!-- Hero -->
+    <header class="hero">
+      <h1 class="brand">Split<em>Smart</em></h1>
+      <p class="hero-sub">Divide fairly. Settle simply.</p>
+    </header>
+
+    <!-- Main Card -->
+    <main class="card">
+      <div class="card-header">
+        <h2>Add Group Members</h2>
+        <p>Who's sharing expenses on this trip?</p>
+      </div>
+
+      <div class="input-row">
+        <input
+          type="text"
+          id="memberInput"
+          class="text-input"
+          placeholder="Enter member name…"
+          maxlength="30"
+          autocomplete="off"
+        />
+        <button class="btn btn-primary" id="addMemberBtn">
+          <span>+ Add</span>
+        </button>
+      </div>
+
+      <div id="memberError" class="error-msg hidden"></div>
+
+      <!-- Members List -->
+      <div id="membersList" class="members-list">
+        <!-- Populated by JS -->
+      </div>
+
+      <div id="emptyState" class="empty-state">
+        <div class="empty-icon">👥</div>
+        <p>No members yet. Add at least 2 to continue.</p>
+      </div>
+    </main>
+
+    <!-- Navigation -->
+    <div class="nav-bar">
+      <div class="member-count-badge" id="memberCountBadge">0 members</div>
+      <button class="btn btn-next" id="nextBtn" disabled>
+        Continue to Expenses →
+      </button>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+  <script>
+    // ─── Members Page Logic ───────────────────────────────────────────
+    initStorage();
+    renderMembers();
+
+    const memberInput = document.getElementById('memberInput');
+    const addBtn = document.getElementById('addMemberBtn');
+    const nextBtn = document.getElementById('nextBtn');
+    const errorEl = document.getElementById('memberError');
+
+    addBtn.addEventListener('click', addMember);
+    memberInput.addEventListener('keydown', e => { if (e.key === 'Enter') addMember(); });
+    nextBtn.addEventListener('click', () => { window.location.href = 'expenses.html'; });
+
+    function addMember() {
+      const name = memberInput.value.trim();
+      // Validation
+      if (!name) return showError('Please enter a name.');
+      if (name.length < 2) return showError('Name must be at least 2 characters.');
+      const members = getMembers();
+      if (members.map(m => m.toLowerCase()).includes(name.toLowerCase()))
+        return showError(`"${name}" is already in the group.`);
+
+      members.push(name);
+      saveMembers(members);
+      memberInput.value = '';
+      hideError();
+      renderMembers();
+    }
+
+    function renderMembers() {
+      const members = getMembers();
+      const list = document.getElementById('membersList');
+      const empty = document.getElementById('emptyState');
+      const badge = document.getElementById('memberCountBadge');
+
+      badge.textContent = `${members.length} member${members.length !== 1 ? 's' : ''}`;
+
+      if (members.length === 0) {
+        list.innerHTML = '';
+        empty.classList.remove('hidden');
+        nextBtn.disabled = true;
+        return;
+      }
+
+      empty.classList.add('hidden');
+      nextBtn.disabled = members.length < 2;
+
+      list.innerHTML = members.map((name, i) => `
+        <div class="member-chip animate-in" style="animation-delay:${i * 60}ms">
+          <div class="member-avatar">${name.charAt(0).toUpperCase()}</div>
+          <span class="member-name">${escHtml(name)}</span>
+          <button class="remove-btn" onclick="removeMember(${i})" title="Remove ${escHtml(name)}">✕</button>
+        </div>
+      `).join('');
+    }
+
+    function removeMember(index) {
+      const members = getMembers();
+      // Check if this member has expenses
+      const expenses = getExpenses();
+      if (expenses.some(e => e.paidBy === members[index])) {
+        showError(`Cannot remove "${members[index]}" — they have recorded expenses.`);
+        return;
+      }
+      members.splice(index, 1);
+      saveMembers(members);
+      renderMembers();
+    }
+
+    function showError(msg) {
+      errorEl.textContent = msg;
+      errorEl.classList.remove('hidden');
+      memberInput.classList.add('input-error');
+      setTimeout(hideError, 3000);
+    }
+    function hideError() {
+      errorEl.classList.add('hidden');
+      memberInput.classList.remove('input-error');
+    }
+  </script>
+</body>
+</html>

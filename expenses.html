@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>SplitSmart – Expenses</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <button class="theme-toggle" id="themeToggle" title="Toggle dark mode">
+    <span class="toggle-icon">☽</span>
+  </button>
+
+  <div class="page-wrapper">
+    <!-- Step Indicator -->
+    <div class="stepper">
+      <div class="step done"><span class="step-num">✓</span><span class="step-label">Members</span></div>
+      <div class="step-line active"></div>
+      <div class="step active"><span class="step-num">2</span><span class="step-label">Expenses</span></div>
+      <div class="step-line"></div>
+      <div class="step"><span class="step-num">3</span><span class="step-label">Settlement</span></div>
+    </div>
+
+    <header class="page-header">
+      <h2 class="page-title">Log Expenses</h2>
+      <div class="members-pill" id="membersPill"><!-- JS fills --></div>
+    </header>
+
+    <!-- Add Expense Card -->
+    <main class="card">
+      <div class="card-header">
+        <h2>New Expense</h2>
+        <p>Record who paid and what for.</p>
+      </div>
+
+      <div class="form-grid">
+        <div class="form-group">
+          <label for="paidBySelect">Paid by</label>
+          <select id="paidBySelect" class="text-input select-input">
+            <option value="">Select member…</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="amountInput">Amount (₹)</label>
+          <div class="amount-wrap">
+            <span class="currency-symbol">₹</span>
+            <input
+              type="number"
+              id="amountInput"
+              class="text-input amount-input"
+              placeholder="0.00"
+              min="0.01"
+              step="0.01"
+            />
+          </div>
+        </div>
+
+        <div class="form-group form-group--full">
+          <label for="descInput">Description</label>
+          <input
+            type="text"
+            id="descInput"
+            class="text-input"
+            placeholder="e.g. Dinner, Hotel, Fuel…"
+            maxlength="60"
+            autocomplete="off"
+          />
+        </div>
+      </div>
+
+      <div id="expenseError" class="error-msg hidden"></div>
+
+      <button class="btn btn-primary btn-full" id="addExpenseBtn">
+        + Add Expense
+      </button>
+    </main>
+
+    <!-- Expenses Table Card -->
+    <div class="card card--table" id="tableCard">
+      <div class="card-header card-header--row">
+        <div>
+          <h2>All Expenses</h2>
+          <p id="expenseSubtitle">No expenses yet.</p>
+        </div>
+        <div class="total-badge" id="totalBadge">Total: ₹0</div>
+      </div>
+
+      <div id="expenseTableWrap">
+        <div id="tableEmpty" class="empty-state">
+          <div class="empty-icon">🧾</div>
+          <p>Add your first expense above.</p>
+        </div>
+        <table class="expense-table hidden" id="expenseTable">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Description</th>
+              <th>Paid by</th>
+              <th>Amount</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="expenseTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Navigation -->
+    <div class="nav-bar">
+      <button class="btn btn-ghost" onclick="window.location.href='index.html'">← Back</button>
+      <button class="btn btn-next" id="nextBtn" disabled>
+        View Settlement →
+      </button>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+  <script>
+    // ─── Expenses Page Logic ──────────────────────────────────────────
+    initStorage();
+    guardPage('expenses'); // redirect if no members
+
+    // Populate dropdown
+    const members = getMembers();
+    const select = document.getElementById('paidBySelect');
+    members.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m;
+      opt.textContent = m;
+      select.appendChild(opt);
+    });
+
+    // Members pill
+    document.getElementById('membersPill').innerHTML =
+      members.map(m => `<span class="mpill">${escHtml(m)}</span>`).join('');
+
+    renderExpenses();
+
+    const addBtn = document.getElementById('addExpenseBtn');
+    const nextBtn = document.getElementById('nextBtn');
+    const errorEl = document.getElementById('expenseError');
+
+    addBtn.addEventListener('click', addExpense);
+    document.getElementById('amountInput').addEventListener('keydown', e => {
+      if (e.key === 'Enter') addExpense();
+    });
+    nextBtn.addEventListener('click', () => { window.location.href = 'settlement.html'; });
+
+    function addExpense() {
+      const paidBy = select.value;
+      const amountRaw = document.getElementById('amountInput').value.trim();
+      const description = document.getElementById('descInput').value.trim();
+
+      if (!paidBy) return showError('Please select who paid.');
+      if (!amountRaw || isNaN(amountRaw) || parseFloat(amountRaw) <= 0)
+        return showError('Enter a valid amount greater than 0.');
+      if (!description) return showError('Please add a description.');
+
+      const amount = parseFloat(parseFloat(amountRaw).toFixed(2));
+      const expenses = getExpenses();
+      expenses.push({ paidBy, amount, description, id: Date.now() });
+      saveExpenses(expenses);
+
+      // Reset form
+      select.value = '';
+      document.getElementById('amountInput').value = '';
+      document.getElementById('descInput').value = '';
+      hideError();
+      renderExpenses();
+    }
+
+    function renderExpenses() {
+      const expenses = getExpenses();
+      const tbody = document.getElementById('expenseTableBody');
+      const table = document.getElementById('expenseTable');
+      const empty = document.getElementById('tableEmpty');
+      const badge = document.getElementById('totalBadge');
+      const subtitle = document.getElementById('expenseSubtitle');
+
+      const total = expenses.reduce((s, e) => s + e.amount, 0);
+      badge.textContent = `Total: ₹${fmt(total)}`;
+      nextBtn.disabled = expenses.length === 0;
+
+      if (expenses.length === 0) {
+        table.classList.add('hidden');
+        empty.classList.remove('hidden');
+        subtitle.textContent = 'No expenses yet.';
+        return;
+      }
+
+      subtitle.textContent = `${expenses.length} expense${expenses.length !== 1 ? 's' : ''} recorded.`;
+      empty.classList.add('hidden');
+      table.classList.remove('hidden');
+
+      tbody.innerHTML = expenses.map((exp, i) => `
+        <tr class="animate-in" style="animation-delay:${i * 40}ms">
+          <td class="td-num">${i + 1}</td>
+          <td class="td-desc">${escHtml(exp.description)}</td>
+          <td><span class="payer-tag">${escHtml(exp.paidBy)}</span></td>
+          <td class="td-amount">₹${fmt(exp.amount)}</td>
+          <td><button class="remove-btn" onclick="removeExpense(${i})" title="Delete">✕</button></td>
+        </tr>
+      `).join('');
+    }
+
+    function removeExpense(index) {
+      const expenses = getExpenses();
+      expenses.splice(index, 1);
+      saveExpenses(expenses);
+      renderExpenses();
+    }
+
+    function showError(msg) {
+      errorEl.textContent = msg;
+      errorEl.classList.remove('hidden');
+      setTimeout(hideError, 3000);
+    }
+    function hideError() { errorEl.classList.add('hidden'); }
+  </script>
+</body>
+</html>
