@@ -8,8 +8,11 @@ Built entirely with HTML, CSS, and Vanilla JavaScript.
 
 - **Add Group Members:** Quickly add people who are sharing expenses.
 - **Support Multiple Currencies:** Choose from INR, USD, EUR, GBP, and SGD.
-- **Log Expenses:** Record who paid and how much, with detailed descriptions.
-- **Smart Settlement Algorithm:** Instantly calculates the most efficient way to settle all debts (who owes whom), minimizing the number of transactions.
+- **Log Expenses with Categories:** Record who paid and how much, along with detailed descriptions and categorizations (Food, Travel, Stay, Misc).
+- **Flexible Split Modes:** Choose between dividing expenses equally among selected members, or use custom split amounts for precise sharing.
+- **Spending Insights:** View quick utility stats including Top Category, Average Expense, and Largest Expense right within the app.
+- **Search and Filter:** Easily search through expenses by description/payer, and filter them by category.
+- **Smart Settlement Algorithm:** Instantly calculates the most efficient way to settle all debts (who owes whom), minimizing the number of transactions and displaying detailed stats about spending behaviors.
 - **Dark Mode:** A sleek dark theme that persists across pages.
 - **State Persistence:** Data is reliably stored locally so you don't lose anything when moving between pages.
 - **Responsive Design:** Works smoothly, with beautiful UI elements built from scratch without external libraries.

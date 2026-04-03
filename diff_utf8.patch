@@ -1,0 +1,1532 @@
+﻿diff --git a/app.js b/app.js
+index 5756359..d9eb999 100644
+--- a/app.js
++++ b/app.js
+@@ -1,13 +1,9 @@
+-/**
+- * SplitSmart ΓÇô Shared Utilities (app.js)
+- * Handles: sessionStorage helpers, dark mode, page guards, formatting
+- */
+-
+ // ΓöÇΓöÇΓöÇ Storage Keys ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ const KEYS = {
+   members:  'splitsmart_members',
+   expenses: 'splitsmart_expenses',
+-  theme:    'splitsmart_theme'
++  theme:    'splitsmart_theme',
++  currency: 'splitsmart_currency'
+ };
+ 
+ // ΓöÇΓöÇΓöÇ Storage Helpers ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+@@ -34,6 +30,108 @@ function saveExpenses(arr) {
+   sessionStorage.setItem(KEYS.expenses, JSON.stringify(arr));
+ }
+ 
++/**
++ * Normalize older and newer expense records into a consistent shape.
++ * Supports legacy records that only have {paidBy, amount, ...}.
++ */
++function normalizeExpense(expense, members) {
++  const baseMembers = Array.isArray(members) ? members : getMembers();
++  const splitType = expense.splitType === 'custom' ? 'custom' : 'equal';
++  const participants = Array.isArray(expense.participants) && expense.participants.length
++    ? expense.participants.filter(name => baseMembers.includes(name))
++    : [...baseMembers];
++
++  const normalized = {
++    ...expense,
++    splitType,
++    participants
++  };
++
++  if (splitType === 'custom' && expense.customShares && typeof expense.customShares === 'object') {
++    const cleanShares = {};
++    participants.forEach(name => {
++      const val = parseFloat(expense.customShares[name] || 0);
++      cleanShares[name] = Number.isFinite(val) ? +val.toFixed(2) : 0;
++    });
++    normalized.customShares = cleanShares;
++  } else {
++    normalized.customShares = null;
++  }
++
++  return normalized;
++}
++
++/**
++ * Compute paid/owed/balance using expense-level split metadata.
++ * - equal split: only selected participants share equally
++ * - custom split: customShares defines exact per-member share
++ */
++function computeBalances(members, expenses) {
++  const paid = {};
++  const owed = {};
++  members.forEach(m => {
++    paid[m] = 0;
++    owed[m] = 0;
++  });
++
++  const normalizedExpenses = expenses.map(e => normalizeExpense(e, members));
++
++  normalizedExpenses.forEach(exp => {
++    const amount = +parseFloat(exp.amount || 0).toFixed(2);
++    if (!Number.isFinite(amount) || amount <= 0) return;
++
++    if (paid[exp.paidBy] !== undefined) paid[exp.paidBy] += amount;
++
++    if (exp.splitType === 'custom' && exp.customShares) {
++      let customSum = 0;
++      exp.participants.forEach(name => {
++        const share = +parseFloat(exp.customShares[name] || 0).toFixed(2);
++        if (owed[name] !== undefined) owed[name] += share;
++        customSum += share;
++      });
++      // Fallback safety for malformed data: if shares don't sum, use equal split.
++      if (Math.abs(customSum - amount) > 0.01 && exp.participants.length > 0) {
++        const equalShare = amount / exp.participants.length;
++        exp.participants.forEach(name => {
++          if (owed[name] !== undefined) {
++            owed[name] -= +parseFloat(exp.customShares[name] || 0).toFixed(2);
++            owed[name] += equalShare;
++          }
++        });
++      }
++      return;
++    }
++
++    if (exp.participants.length === 0) return;
++    const share = amount / exp.participants.length;
++    exp.participants.forEach(name => {
++      if (owed[name] !== undefined) owed[name] += share;
++    });
++  });
++
++  const balance = {};
++  members.forEach(m => {
++    paid[m] = +paid[m].toFixed(2);
++    owed[m] = +owed[m].toFixed(2);
++    balance[m] = +(paid[m] - owed[m]).toFixed(2);
++  });
++
++  return { paid, owed, balance, normalizedExpenses };
++}
++
++function clearStorage() {
++  sessionStorage.removeItem(KEYS.members);
++  sessionStorage.removeItem(KEYS.expenses);
++  sessionStorage.removeItem(KEYS.currency);
++}
++
++function getCurrency() {
++  return sessionStorage.getItem(KEYS.currency) || 'Γé╣';
++}
++function saveCurrency(sym) {
++  sessionStorage.setItem(KEYS.currency, sym);
++}
++
+ // ΓöÇΓöÇΓöÇ Page Guard ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ /**
+  * Redirect user if required data is missing.
+@@ -55,10 +153,12 @@ function guardPage(page) {
+ 
+ // ΓöÇΓöÇΓöÇ Formatting ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ 
+-/** Format number to 2 decimal places, strip trailing zeros neatly */
++/** Format number to 2 decimal places, strip trailing zeros neatly. Includes currency. */
+ function fmt(num) {
+   const n = parseFloat(num);
+-  return n % 1 === 0 ? n.toLocaleString('en-IN') : n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
++  const formatted = n % 1 === 0 ? n.toLocaleString('en-US') : n.toLocaleString('en-US', { minimumFractionDigits: 2, 
++    maximumFractionDigits: 2 });
++  return getCurrency() + formatted;
+ }
+ 
+ /** Escape HTML to prevent XSS */
+diff --git a/expenses.html b/expenses.html
+index fd88dac..7c9b511 100644
+--- a/expenses.html
++++ b/expenses.html
+@@ -38,16 +38,16 @@
+ 
+       <div class="form-grid">
+         <div class="form-group">
+-          <label for="paidBySelect">Paid by</label>
++          <label for="paidBySelect" class="required">Paid by</label>
+           <select id="paidBySelect" class="text-input select-input">
+             <option value="">Select memberΓÇª</option>
+           </select>
+         </div>
+ 
+         <div class="form-group">
+-          <label for="amountInput">Amount (Γé╣)</label>
++          <label for="amountInput" class="required">Amount</label>
+           <div class="amount-wrap">
+-            <span class="currency-symbol">Γé╣</span>
++            <span class="currency-symbol" id="currSym">Γé╣</span>
+             <input
+               type="number"
+               id="amountInput"
+@@ -59,8 +59,18 @@
+           </div>
+         </div>
+ 
+-        <div class="form-group form-group--full">
+-          <label for="descInput">Description</label>
++        <div class="form-group">
++          <label for="categorySelect">Category</label>
++          <select id="categorySelect" class="text-input select-input">
++            <option value="Food">Food</option>
++            <option value="Travel">Travel</option>
++            <option value="Stay">Stay</option>
++            <option value="Misc">Misc</option>
++          </select>
++        </div>
++
++        <div class="form-group">
++          <label for="descInput" class="required">Description</label>
+           <input
+             type="text"
+             id="descInput"
+@@ -70,6 +80,25 @@
+             autocomplete="off"
+           />
+         </div>
++
++        <div class="form-group form-group--full">
++          <label for="splitTypeSelect">Split mode</label>
++          <select id="splitTypeSelect" class="text-input select-input">
++            <option value="equal">Split equally between selected members</option>
++            <option value="custom">Custom split amounts</option>
++          </select>
++        </div>
++
++        <div class="form-group form-group--full">
++          <label class="required">Split between</label>
++          <div id="participantChecks" class="participants-grid"></div>
++        </div>
++
++        <div class="form-group form-group--full hidden" id="customSplitGroup">
++          <label class="required">Custom amounts</label>
++          <div id="customSplitGrid" class="custom-split-grid"></div>
++          <p id="customSplitHint" class="hint-text"></p>
++        </div>
+       </div>
+ 
+       <div id="expenseError" class="error-msg hidden"></div>
+@@ -79,6 +108,19 @@
+       </button>
+     </main>
+ 
++    <!-- Insights Card -->
++    <div class="card">
++      <div class="card-header card-header--row">
++        <div>
++          <h2>Insights</h2>
++          <p>Quick utility stats inspired by Splitwise-style usage.</p>
++        </div>
++      </div>
++      <div id="insightsGrid" class="insights-grid">
++        <!-- JS fills -->
++      </div>
++    </div>
++
+     <!-- Expenses Table Card -->
+     <div class="card card--table" id="tableCard">
+       <div class="card-header card-header--row">
+@@ -86,7 +128,17 @@
+           <h2>All Expenses</h2>
+           <p id="expenseSubtitle">No expenses yet.</p>
+         </div>
+-        <div class="total-badge" id="totalBadge">Total: Γé╣0</div>
++        <div class="total-badge" id="totalBadge">Total: 0</div>
++      </div>
++      <div class="table-toolbar">
++        <input id="expenseSearchInput" class="text-input" placeholder="Search by description or payer..." />
++        <select id="expenseFilterCategory" class="text-input select-input">
++          <option value="all">All categories</option>
++          <option value="Food">Food</option>
++          <option value="Travel">Travel</option>
++          <option value="Stay">Stay</option>
++          <option value="Misc">Misc</option>
++        </select>
+       </div>
+ 
+       <div id="expenseTableWrap">
+@@ -100,6 +152,7 @@
+               <th>#</th>
+               <th>Description</th>
+               <th>Paid by</th>
++              <th>Split</th>
+               <th>Amount</th>
+               <th></th>
+             </tr>
+@@ -121,12 +174,25 @@
+   <script src="app.js"></script>
+   <script>
+     // ΓöÇΓöÇΓöÇ Expenses Page Logic ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++    const select = document.getElementById('paidBySelect');
++    const addBtn = document.getElementById('addExpenseBtn');
++    const nextBtn = document.getElementById('nextBtn');
++    const errorEl = document.getElementById('expenseError');
++    const splitTypeSelect = document.getElementById('splitTypeSelect');
++    const participantChecks = document.getElementById('participantChecks');
++    const customSplitGroup = document.getElementById('customSplitGroup');
++    const customSplitGrid = document.getElementById('customSplitGrid');
++    const customSplitHint = document.getElementById('customSplitHint');
++    const searchInput = document.getElementById('expenseSearchInput');
++    const categoryFilter = document.getElementById('expenseFilterCategory');
++    const amountInput = document.getElementById('amountInput');
++
+     initStorage();
+     guardPage('expenses'); // redirect if no members
++    document.getElementById('currSym').textContent = getCurrency();
++    document.getElementById('totalBadge').textContent = `Total: ${fmt(0)}`;
+ 
+-    // Populate dropdown
+     const members = getMembers();
+-    const select = document.getElementById('paidBySelect');
+     members.forEach(m => {
+       const opt = document.createElement('option');
+       opt.value = m;
+@@ -134,57 +200,141 @@
+       select.appendChild(opt);
+     });
+ 
+-    // Members pill
+     document.getElementById('membersPill').innerHTML =
+       members.map(m => `<span class="mpill">${escHtml(m)}</span>`).join('');
+ 
++    renderParticipantChecks();
++    renderCustomSplitInputs();
++    toggleCustomSplitMode();
+     renderExpenses();
+ 
+-    const addBtn = document.getElementById('addExpenseBtn');
+-    const nextBtn = document.getElementById('nextBtn');
+-    const errorEl = document.getElementById('expenseError');
+-
+     addBtn.addEventListener('click', addExpense);
+-    document.getElementById('amountInput').addEventListener('keydown', e => {
++    amountInput.addEventListener('keydown', e => {
+       if (e.key === 'Enter') addExpense();
+     });
++    amountInput.addEventListener('input', updateCustomSplitHint);
++    splitTypeSelect.addEventListener('change', () => {
++      toggleCustomSplitMode();
++      updateCustomSplitHint();
++    });
++    participantChecks.addEventListener('change', () => {
++      renderCustomSplitInputs();
++      updateCustomSplitHint();
++    });
++    customSplitGrid.addEventListener('input', updateCustomSplitHint);
++    searchInput.addEventListener('input', renderExpenses);
++    categoryFilter.addEventListener('change', renderExpenses);
+     nextBtn.addEventListener('click', () => { window.location.href = 'settlement.html'; });
+ 
++    function renderParticipantChecks() {
++      participantChecks.innerHTML = members.map((m, i) => `
++        <label class="participant-chip">
++          <input type="checkbox" data-member="${escHtml(m)}" checked>
++          <span>${escHtml(m)}</span>
++        </label>
++      `).join('');
++    }
++
++    function getSelectedParticipants() {
++      return [...participantChecks.querySelectorAll('input[type="checkbox"]:checked')].map(el => el.getAttribute('data-member'));
++    }
++
++    function renderCustomSplitInputs() {
++      const selected = getSelectedParticipants();
++      customSplitGrid.innerHTML = selected.map(name => `
++        <label class="custom-share-item">
++          <span>${escHtml(name)}</span>
++          <input type="number" class="text-input custom-share-input" data-member="${escHtml(name)}" min="0" step="0.01" placeholder="0.00" />
++        </label>
++      `).join('');
++      updateCustomSplitHint();
++    }
++
++    function toggleCustomSplitMode() {
++      customSplitGroup.classList.toggle('hidden', splitTypeSelect.value !== 'custom');
++    }
++
++    function updateCustomSplitHint() {
++      if (splitTypeSelect.value !== 'custom') {
++        customSplitHint.textContent = 'Equal mode: selected members split the amount equally.';
++        return;
++      }
++      const amount = parseFloat(document.getElementById('amountInput').value || 0);
++      const totalCustom = [...customSplitGrid.querySelectorAll('.custom-share-input')]
++        .reduce((sum, input) => sum + parseFloat(input.value || 0), 0);
++      customSplitHint.textContent = `Custom total: ${fmt(totalCustom)}${amount > 0 ? ` / Expense amount: ${fmt(amount)}` : ''}`;
++    }
++
+     function addExpense() {
+       const paidBy = select.value;
+       const amountRaw = document.getElementById('amountInput').value.trim();
++      const category = document.getElementById('categorySelect').value;
+       const description = document.getElementById('descInput').value.trim();
++      const splitType = splitTypeSelect.value;
++      const participants = getSelectedParticipants();
+ 
+       if (!paidBy) return showError('Please select who paid.');
+       if (!amountRaw || isNaN(amountRaw) || parseFloat(amountRaw) <= 0)
+         return showError('Enter a valid amount greater than 0.');
+       if (!description) return showError('Please add a description.');
++      if (participants.length === 0) return showError('Select at least one member for split.');
+ 
+       const amount = parseFloat(parseFloat(amountRaw).toFixed(2));
++      const expense = { paidBy, amount, category, description, id: Date.now(), splitType, participants };
++
++      if (splitType === 'custom') {
++        const customShares = {};
++        let customSum = 0;
++        for (const input of customSplitGrid.querySelectorAll('.custom-share-input')) {
++          const name = input.getAttribute('data-member');
++          const value = parseFloat((input.value || '0').trim());
++          const safe = Number.isFinite(value) && value >= 0 ? +value.toFixed(2) : 0;
++          customShares[name] = safe;
++          customSum += safe;
++        }
++        if (Math.abs(customSum - amount) > 0.01) {
++          return showError(`Custom split must total exactly ${fmt(amount)}.`);
++        }
++        expense.customShares = customShares;
++      }
++
+       const expenses = getExpenses();
+-      expenses.push({ paidBy, amount, description, id: Date.now() });
++      expenses.push(expense);
+       saveExpenses(expenses);
+ 
+-      // Reset form
+       select.value = '';
+       document.getElementById('amountInput').value = '';
+       document.getElementById('descInput').value = '';
++      splitTypeSelect.value = 'equal';
++      renderParticipantChecks();
++      renderCustomSplitInputs();
++      toggleCustomSplitMode();
+       hideError();
+       renderExpenses();
+     }
+ 
+     function renderExpenses() {
+-      const expenses = getExpenses();
++      const expenses = getExpenses().map(e => normalizeExpense(e, members));
+       const tbody = document.getElementById('expenseTableBody');
+       const table = document.getElementById('expenseTable');
+       const empty = document.getElementById('tableEmpty');
+       const badge = document.getElementById('totalBadge');
+       const subtitle = document.getElementById('expenseSubtitle');
++      const query = searchInput.value.trim().toLowerCase();
++      const cat = categoryFilter.value;
+ 
+       const total = expenses.reduce((s, e) => s + e.amount, 0);
+-      badge.textContent = `Total: Γé╣${fmt(total)}`;
++      badge.textContent = `Total: ${fmt(total)}`;
+       nextBtn.disabled = expenses.length === 0;
+ 
++      const filtered = expenses.filter(exp => {
++        const inText = !query || exp.description.toLowerCase().includes(query) || exp.paidBy.toLowerCase().includes(query);
++        const inCat = cat === 'all' || (exp.category || 'Misc') === cat;
++        return inText && inCat;
++      });
++
++      renderInsights(expenses);
++
+       if (expenses.length === 0) {
+         table.classList.add('hidden');
+         empty.classList.remove('hidden');
+@@ -192,24 +342,50 @@
+         return;
+       }
+ 
+-      subtitle.textContent = `${expenses.length} expense${expenses.length !== 1 ? 's' : ''} recorded.`;
+-      empty.classList.add('hidden');
+-      table.classList.remove('hidden');
++      subtitle.textContent = `${filtered.length} of ${expenses.length} expense${expenses.length !== 1 ? 's' : ''}.`;
++      empty.classList.toggle('hidden', filtered.length > 0);
++      table.classList.toggle('hidden', filtered.length === 0);
+ 
+-      tbody.innerHTML = expenses.map((exp, i) => `
++      tbody.innerHTML = filtered.map((exp, i) => `
+         <tr class="animate-in" style="animation-delay:${i * 40}ms">
+           <td class="td-num">${i + 1}</td>
+-          <td class="td-desc">${escHtml(exp.description)}</td>
++          <td class="td-desc">${escHtml(exp.description)} <span class="cat-tag">${escHtml(exp.category || 'Misc')}</span></td>
+           <td><span class="payer-tag">${escHtml(exp.paidBy)}</span></td>
+-          <td class="td-amount">Γé╣${fmt(exp.amount)}</td>
+-          <td><button class="remove-btn" onclick="removeExpense(${i})" title="Delete">Γ£ò</button></td>
++          <td><span class="split-tag">${exp.splitType === 'custom' ? 'Custom' : `Equal (${exp.participants.length})`}</span></td>
++          <td class="td-amount">${fmt(exp.amount)}</td>
++          <td><button class="remove-btn" onclick="removeExpense(${exp.id})" title="Delete">Γ£ò</button></td>
+         </tr>
+       `).join('');
+     }
+ 
+-    function removeExpense(index) {
++    function renderInsights(expenses) {
++      const grid = document.getElementById('insightsGrid');
++      if (!expenses.length) {
++        grid.innerHTML = `<div class="empty-state"><p>Insights appear once expenses are added.</p></div>`;
++        return;
++      }
++
++      const byCategory = {};
++      expenses.forEach(e => {
++        const key = e.category || 'Misc';
++        byCategory[key] = (byCategory[key] || 0) + e.amount;
++      });
++      const topCategory = Object.entries(byCategory).sort((a, b) => b[1] - a[1])[0];
++      const largestExpense = [...expenses].sort((a, b) => b.amount - a.amount)[0];
++      const avgExpense = expenses.reduce((s, e) => s + e.amount, 0) / expenses.length;
++
++      grid.innerHTML = `
++        <div class="insight-card"><div class="stat-label">Top category</div><div class="stat-value">${escHtml(topCategory[0])}</div><p>${fmt(topCategory[1])}</p></div>
++        <div class="insight-card"><div class="stat-label">Largest expense</div><div class="stat-value">${fmt(largestExpense.amount)}</div><p>${escHtml(largestExpense.description)}</p></div>
++        <div class="insight-card"><div class="stat-label">Average expense</div><div class="stat-value">${fmt(avgExpense)}</div><p>${expenses.length} entries</p></div>
++      `;
++    }
++
++    function removeExpense(expenseId) {
+       const expenses = getExpenses();
+-      expenses.splice(index, 1);
++      const idx = expenses.findIndex(e => e.id === expenseId);
++      if (idx === -1) return;
++      expenses.splice(idx, 1);
+       saveExpenses(expenses);
+       renderExpenses();
+     }
+diff --git a/index.html b/index.html
+index f151bfa..b97b8a8 100644
+--- a/index.html
++++ b/index.html
+@@ -38,18 +38,31 @@
+         <p>Who's sharing expenses on this trip?</p>
+       </div>
+ 
+-      <div class="input-row">
+-        <input
+-          type="text"
+-          id="memberInput"
+-          class="text-input"
+-          placeholder="Enter member nameΓÇª"
+-          maxlength="30"
+-          autocomplete="off"
+-        />
+-        <button class="btn btn-primary" id="addMemberBtn">
+-          <span>+ Add</span>
+-        </button>
++      <div class="form-group" style="margin-bottom: 16px;">
++        <label>Base Currency</label>
++        <select id="currencySelect" class="text-input select-input">
++          <option value="Γé╣">INR (Γé╣)</option>
++          <option value="$">USD ($)</option>
++          <option value="Γé¼">EUR (Γé¼)</option>
++          <option value="┬ú">GBP (┬ú)</option>
++        </select>
++      </div>
++
++      <div class="form-group">
++        <label class="required" for="memberInput">Member name</label>
++        <div class="input-row">
++          <input
++            type="text"
++            id="memberInput"
++            class="text-input"
++            placeholder="Enter member nameΓÇª"
++            maxlength="30"
++            autocomplete="off"
++          />
++          <button class="btn btn-primary" id="addMemberBtn">
++            <span>+ Add</span>
++          </button>
++        </div>
+       </div>
+ 
+       <div id="memberError" class="error-msg hidden"></div>
+@@ -77,14 +90,18 @@
+   <script src="app.js"></script>
+   <script>
+     // ΓöÇΓöÇΓöÇ Members Page Logic ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+-    initStorage();
+-    renderMembers();
+-
+     const memberInput = document.getElementById('memberInput');
+     const addBtn = document.getElementById('addMemberBtn');
+     const nextBtn = document.getElementById('nextBtn');
+     const errorEl = document.getElementById('memberError');
+ 
++    initStorage();
++    renderMembers();
++
++    const currencySelect = document.getElementById('currencySelect');
++    currencySelect.value = getCurrency();
++    currencySelect.addEventListener('change', e => saveCurrency(e.target.value));
++
+     addBtn.addEventListener('click', addMember);
+     memberInput.addEventListener('keydown', e => { if (e.key === 'Enter') addMember(); });
+     nextBtn.addEventListener('click', () => { window.location.href = 'expenses.html'; });
+@@ -134,10 +151,16 @@
+ 
+     function removeMember(index) {
+       const members = getMembers();
++      const memberName = members[index];
+       // Check if this member has expenses
+-      const expenses = getExpenses();
+-      if (expenses.some(e => e.paidBy === members[index])) {
+-        showError(`Cannot remove "${members[index]}" ΓÇö they have recorded expenses.`);
++      const expenses = getExpenses().map(e => normalizeExpense(e, members));
++      const isReferenced = expenses.some(e =>
++        e.paidBy === memberName ||
++        (Array.isArray(e.participants) && e.participants.includes(memberName)) ||
++        (e.customShares && Object.prototype.hasOwnProperty.call(e.customShares, memberName))
++      );
++      if (isReferenced) {
++        showError(`Cannot remove "${memberName}" ΓÇö they are referenced in recorded expenses.`);
+         return;
+       }
+       members.splice(index, 1);
+diff --git a/settlement.html b/settlement.html
+index 60526e2..e6d4a71 100644
+--- a/settlement.html
++++ b/settlement.html
+@@ -84,35 +84,32 @@
+ 
+     const members  = getMembers();
+     const expenses = getExpenses();
+-    const n        = members.length;
+     const total    = expenses.reduce((s, e) => s + e.amount, 0);
+-    const share    = total / n;
+-
+-    // ΓöÇΓöÇ 1. Build balance map ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+-    const paid = {}; // total paid by each member
+-    members.forEach(m => paid[m] = 0);
+-    expenses.forEach(e => { paid[e.paidBy] += e.amount; });
+-
+-    const balance = {}; // positive = owed to them, negative = they owe
+-    members.forEach(m => { balance[m] = +(paid[m] - share).toFixed(2); });
++    const perMemberAvg = total / members.length;
++    const { paid, owed, balance, normalizedExpenses } = computeBalances(members, expenses);
+ 
+     // ΓöÇΓöÇ 2. Stats Row ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++    const sortedMembers = [...members].sort((a, b) => paid[b] - paid[a]);
++    const highestSpender = sortedMembers[0];
++    const lowestSpender = sortedMembers[sortedMembers.length - 1];
++    const customCount = normalizedExpenses.filter(e => e.splitType === 'custom').length;
++
+     document.getElementById('statsRow').innerHTML = `
+       <div class="stat-card">
+         <div class="stat-label">Total Spent</div>
+-        <div class="stat-value">Γé╣${fmt(total)}</div>
++        <div class="stat-value">${fmt(total)}</div>
+       </div>
+       <div class="stat-card">
+-        <div class="stat-label">Per Person</div>
+-        <div class="stat-value">Γé╣${fmt(share)}</div>
++        <div class="stat-label">Avg / Member</div>
++        <div class="stat-value">${fmt(perMemberAvg)}</div>
+       </div>
+       <div class="stat-card">
+-        <div class="stat-label">Members</div>
+-        <div class="stat-value">${n}</div>
++        <div class="stat-label">Highest Spender</div>
++        <div class="stat-value" style="font-size:1.15rem; padding-top:6px;">${escHtml(highestSpender)}</div>
+       </div>
+       <div class="stat-card">
+-        <div class="stat-label">Expenses</div>
+-        <div class="stat-value">${expenses.length}</div>
++        <div class="stat-label">Custom Splits</div>
++        <div class="stat-value" style="font-size:1.15rem; padding-top:6px;">${customCount}</div>
+       </div>
+     `;
+ 
+@@ -120,14 +117,14 @@
+     document.getElementById('breakdownGrid').innerHTML = members.map(m => {
+       const b = balance[m];
+       const cls = b > 0.005 ? 'balance-pos' : b < -0.005 ? 'balance-neg' : 'balance-zero';
+-      const tag = b > 0.005 ? `Receives Γé╣${fmt(b)}` : b < -0.005 ? `Owes Γé╣${fmt(Math.abs(b))}` : 'All settled Γ£ô';
++      const tag = b > 0.005 ? `Receives ${fmt(b)}` : b < -0.005 ? `Owes ${fmt(Math.abs(b))}` : 'All settled Γ£ô';
+       return `
+         <div class="breakdown-card ${cls}">
+           <div class="bd-avatar">${m.charAt(0).toUpperCase()}</div>
+           <div class="bd-info">
+             <div class="bd-name">${escHtml(m)}</div>
+-            <div class="bd-paid">Paid Γé╣${fmt(paid[m])}</div>
+-            <div class="bd-share">Share Γé╣${fmt(share)}</div>
++            <div class="bd-paid">Paid ${fmt(paid[m])}</div>
++            <div class="bd-share">Owes ${fmt(owed[m])}</div>
+           </div>
+           <div class="bd-status">${tag}</div>
+         </div>
+@@ -171,7 +168,7 @@
+             <span>${escHtml(t.from)}</span>
+           </div>
+           <div class="txn-arrow">
+-            <span class="txn-amount">Γé╣${fmt(t.amt)}</span>
++            <span class="txn-amount">${fmt(t.amt)}</span>
+             <div class="arrow-line"><div class="arrow-head">Γû╢</div></div>
+           </div>
+           <div class="txn-to">
+@@ -183,20 +180,21 @@
+     }
+ 
+     // ΓöÇΓöÇ 6. Expense Log ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+-    document.getElementById('logBody').innerHTML = expenses.map((e, i) => `
++    document.getElementById('logBody').innerHTML = normalizedExpenses.map((e, i) => `
+       <tr>
+         <td class="td-num">${i + 1}</td>
+-        <td class="td-desc">${escHtml(e.description)}</td>
++        <td class="td-desc">${escHtml(e.description)} <span class="cat-tag">${escHtml(e.category || 'Misc')}</span>
++          <span class="cat-tag">${e.splitType === 'custom' ? 'Custom split' : `Equal split (${e.participants.length})`}</span>
++        </td>
+         <td><span class="payer-tag">${escHtml(e.paidBy)}</span></td>
+-        <td class="td-amount">Γé╣${fmt(e.amount)}</td>
++        <td class="td-amount">${fmt(e.amount)}</td>
+       </tr>
+     `).join('');
+ 
+     // ΓöÇΓöÇ 7. Reset ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     document.getElementById('resetBtn').addEventListener('click', () => {
+-      if (confirm('Start a new split? All current data will be cleared.')) {
+-        sessionStorage.removeItem('members');
+-        sessionStorage.removeItem('expenses');
++      if (confirm('Are you absolutely sure you want to start a new split? All current data will be permanently cleared.')) {
++        clearStorage();
+         window.location.href = 'index.html';
+       }
+     });
+diff --git a/style.css b/style.css
+index b897a27..0db606a 100644
+--- a/style.css
++++ b/style.css
+@@ -1,83 +1,84 @@
+-/* ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
+-   SplitSmart ΓÇô style.css
+-   Design system: Warm editorial / financial
+-   Fonts: DM Serif Display + DM Sans
+-   Palette: Cream / Deep Teal / Amber
+-ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ */
++/* SplitSmart - enhanced student-friendly theme */
+ 
+ /* ΓöÇΓöÇΓöÇ CSS Variables (Light Mode) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ */
+ :root {
+   /* Core palette */
+-  --bg:           #faf6f0;
+-  --bg-alt:       #f3ede3;
++  --bg:           #f4f7fb;
++  --bg-alt:       #eef3f9;
+   --surface:      #ffffff;
+-  --surface-2:    #fdf9f4;
+-  --border:       #e2d9cc;
+-  --border-soft:  #ede6da;
++  --surface-2:    #f8fbff;
++  --border:       #d4deec;
++  --border-soft:  #e4ebf5;
+ 
+   /* Text */
+-  --text-primary:   #1a1612;
+-  --text-secondary: #6b5f54;
+-  --text-muted:     #9c8c7f;
++  --text-primary:   #1b2738;
++  --text-secondary: #53637b;
++  --text-muted:     #7c8ca7;
+ 
+   /* Accent ΓÇô Deep Teal */
+-  --accent:         #1a6b6b;
+-  --accent-dark:    #134f4f;
+-  --accent-light:   #e6f4f4;
+-  --accent-soft:    #c0e0e0;
++  --accent:         #8b3fae;
++  --accent-dark:    #6f2f8d;
++  --accent-light:   #f6eafd;
++  --accent-soft:    #e8cff6;
++  --accent-2:       #d14b7d;
++  --accent-2-light: #ffeaf2;
+ 
+   /* Amber */
+-  --amber:          #d97b2a;
+-  --amber-light:    #fef3e7;
+-  --amber-soft:     #f7d9b0;
++  --amber:          #d88a2f;
++  --amber-light:    #fdf3e7;
++  --amber-soft:     #efcfaa;
+ 
+   /* Status */
+-  --green:          #1e7a4a;
+-  --green-bg:       #e8f7ef;
+-  --red:            #c0392b;
+-  --red-bg:         #fdecea;
+-  --neutral-bg:     #f0f0f0;
++  --green:          #1f8f66;
++  --green-bg:       #e8f6f0;
++  --red:            #cf4e49;
++  --red-bg:         #fdeeee;
++  --neutral-bg:     #edf2f8;
+ 
+   /* Layout */
+-  --radius:    14px;
+-  --radius-sm: 8px;
+-  --shadow:    0 2px 16px rgba(26, 22, 18, 0.08);
+-  --shadow-lg: 0 6px 30px rgba(26, 22, 18, 0.12);
++  --radius:    16px;
++  --radius-sm: 10px;
++  --ring:      0 0 0 3px rgba(139, 63, 174, 0.22);
++  --shadow:    0 10px 30px rgba(20, 40, 72, 0.08);
++  --shadow-lg: 0 16px 36px rgba(20, 40, 72, 0.14);
+ 
+   /* Transition */
+-  --trans: 0.22s ease;
++  --trans: 0.2s ease;
+ }
+ 
+ /* ΓöÇΓöÇΓöÇ Dark Mode ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ */
+ [data-theme="dark"] {
+-  --bg:           #0f1a1a;
+-  --bg-alt:       #141f1f;
+-  --surface:      #1a2828;
+-  --surface-2:    #1f2f2f;
+-  --border:       #2a3f3f;
+-  --border-soft:  #223333;
+-
+-  --text-primary:   #e8f0ee;
+-  --text-secondary: #8faaa8;
+-  --text-muted:     #5a7a78;
+-
+-  --accent:         #3ab0b0;
+-  --accent-dark:    #2d9090;
+-  --accent-light:   #0d2f2f;
+-  --accent-soft:    #1a4040;
+-
+-  --amber:          #e8944a;
+-  --amber-light:    #2a1a0a;
+-  --amber-soft:     #4a2a10;
+-
+-  --green:          #4ac28a;
+-  --green-bg:       #0a2a1a;
+-  --red:            #f07060;
+-  --red-bg:         #2a0f0a;
+-  --neutral-bg:     #2a3535;
+-
+-  --shadow:    0 2px 16px rgba(0, 0, 0, 0.3);
+-  --shadow-lg: 0 6px 30px rgba(0, 0, 0, 0.4);
++  --bg:           #182132;
++  --bg-alt:       #1e2a3f;
++  --surface:      #263247;
++  --surface-2:    #2d3a51;
++  --border:       #40516c;
++  --border-soft:  #374863;
++
++  --text-primary:   #ebf1fb;
++  --text-secondary: #bcc7dc;
++  --text-muted:     #95a5c4;
++
++  --accent:         #ba87d2;
++  --accent-dark:    #9b63b8;
++  --accent-light:   #4a2f5d;
++  --accent-soft:    #5f3c75;
++  --accent-2:       #ec8bb0;
++  --accent-2-light: #5b3042;
++
++  --amber:          #e6a765;
++  --amber-light:    #3a2a17;
++  --amber-soft:     #5f4327;
++
++  --green:          #56c79c;
++  --green-bg:       #163c2d;
++  --red:            #ef8a85;
++  --red-bg:         #3f1f1d;
++  --neutral-bg:     #313d53;
++
++  --shadow:    0 8px 24px rgba(0, 0, 0, 0.3);
++  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.38);
++  --ring:      0 0 0 3px rgba(236, 139, 176, 0.28);
+ }
+ 
+ /* ΓöÇΓöÇΓöÇ Reset & Base ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ */
+@@ -90,11 +91,12 @@ html {
+ 
+ body {
+   font-family: 'DM Sans', sans-serif;
+-  background: var(--bg);
++  background: linear-gradient(160deg, var(--bg) 0%, var(--bg-alt) 100%);
+   color: var(--text-primary);
+   min-height: 100vh;
+   transition: background var(--trans), color var(--trans);
+-  line-height: 1.6;
++  line-height: 1.68;
++  letter-spacing: 0.01em;
+ }
+ 
+ /* Subtle background texture */
+@@ -103,9 +105,10 @@ body::before {
+   position: fixed;
+   inset: 0;
+   background-image:
+-    radial-gradient(circle at 20% 20%, var(--accent-light) 0%, transparent 50%),
+-    radial-gradient(circle at 80% 80%, var(--amber-light) 0%, transparent 50%);
+-  opacity: 0.6;
++    radial-gradient(circle at 16% 14%, var(--accent-light) 0%, transparent 44%),
++    radial-gradient(circle at 86% 20%, var(--accent-2-light) 0%, transparent 38%),
++    radial-gradient(circle at 84% 86%, rgba(236, 143, 41, 0.14) 0%, transparent 46%);
++  opacity: 0.74;
+   pointer-events: none;
+   z-index: 0;
+ }
+@@ -114,9 +117,9 @@ body::before {
+ .page-wrapper {
+   position: relative;
+   z-index: 1;
+-  max-width: 680px;
++  max-width: 860px;
+   margin: 0 auto;
+-  padding: 32px 20px 100px;
++  padding: 42px 24px 112px;
+ }
+ 
+ /* ΓöÇΓöÇΓöÇ Dark Mode Toggle ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ */
+@@ -125,11 +128,11 @@ body::before {
+   top: 20px;
+   right: 20px;
+   z-index: 1000;
+-  width: 44px;
+-  height: 44px;
++  width: 46px;
++  height: 46px;
+   border-radius: 50%;
+   border: 1.5px solid var(--border);
+-  background: var(--surface);
++  background: linear-gradient(135deg, var(--surface), var(--surface-2));
+   color: var(--text-secondary);
+   font-size: 18px;
+   cursor: pointer;
+@@ -144,6 +147,10 @@ body::before {
+   color: var(--accent);
+   transform: scale(1.08);
+ }
++.theme-toggle:focus-visible {
++  outline: none;
++  box-shadow: var(--ring), var(--shadow);
++}
+ 
+ /* ΓöÇΓöÇΓöÇ Stepper ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ */
+ .stepper {
+@@ -151,9 +158,9 @@ body::before {
+   align-items: center;
+   justify-content: center;
+   gap: 0;
+-  margin-bottom: 36px;
+-  padding: 16px 24px;
+-  background: var(--surface);
++  margin-bottom: 34px;
++  padding: 14px 22px;
++  background: linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%);
+   border: 1px solid var(--border-soft);
+   border-radius: var(--radius);
+   box-shadow: var(--shadow);
+@@ -191,14 +198,14 @@ body::before {
+ }
+ 
+ .step.active .step-num {
+-  background: var(--accent);
++  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+   color: #fff;
+   box-shadow: 0 0 0 4px var(--accent-light);
+ }
+ .step.active .step-label { color: var(--accent); font-weight: 600; }
+ 
+ .step.done .step-num {
+-  background: var(--green);
++  background: linear-gradient(135deg, var(--green), #38b37c);
+   color: #fff;
+ }
+ .step.done .step-label { color: var(--green); }
+@@ -212,12 +219,12 @@ body::before {
+   min-width: 40px;
+   transition: background var(--trans);
+ }
+-.step-line.active { background: var(--green); }
++.step-line.active { background: linear-gradient(90deg, var(--green), var(--accent)); }
+ 
+ /* ΓöÇΓöÇΓöÇ Hero / Page Header ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ */
+ .hero {
+   text-align: center;
+-  margin-bottom: 28px;
++  margin-bottom: 34px;
+ }
+ 
+ .brand {
+@@ -230,6 +237,7 @@ body::before {
+ .brand em {
+   font-style: italic;
+   color: var(--accent);
++  text-shadow: 0 2px 10px rgba(123, 87, 246, 0.28);
+ }
+ 
+ .hero-sub {
+@@ -241,18 +249,18 @@ body::before {
+ }
+ 
+ .page-header {
+-  margin-bottom: 24px;
++  margin-bottom: 28px;
+ }
+ .page-title {
+   font-family: 'DM Serif Display', serif;
+-  font-size: clamp(1.6rem, 5vw, 2.2rem);
++  font-size: clamp(1.8rem, 4.8vw, 2.4rem);
+   color: var(--text-primary);
+   letter-spacing: -0.02em;
+ }
+ .page-sub {
+   color: var(--text-secondary);
+-  font-size: 0.95rem;
+-  margin-top: 4px;
++  font-size: 1rem;
++  margin-top: 6px;
+ }
+ 
+ .members-pill {
+@@ -264,7 +272,7 @@ body::before {
+ .mpill {
+   padding: 3px 11px;
+   border-radius: 99px;
+-  background: var(--accent-light);
++  background: linear-gradient(135deg, var(--accent-light), var(--accent-2-light));
+   color: var(--accent);
+   font-size: 12px;
+   font-weight: 500;
+@@ -273,31 +281,41 @@ body::before {
+ 
+ /* ΓöÇΓöÇΓöÇ Cards ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ */
+ .card {
+-  background: var(--surface);
++  background: linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%);
+   border: 1px solid var(--border-soft);
+   border-radius: var(--radius);
+-  padding: 28px;
+-  margin-bottom: 20px;
++  padding: 30px;
++  margin-bottom: 24px;
+   box-shadow: var(--shadow);
+-  transition: box-shadow var(--trans);
++  transition: box-shadow var(--trans), transform var(--trans), border-color var(--trans);
++}
++.card:hover {
++  box-shadow: var(--shadow-lg);
++  transform: translateY(-2px);
++  border-color: var(--accent-soft);
+ }
+-.card:hover { box-shadow: var(--shadow-lg); }
+ 
+ .card-header {
+-  margin-bottom: 22px;
++  margin-bottom: 24px;
+   padding-bottom: 16px;
+   border-bottom: 1px solid var(--border-soft);
++  background: linear-gradient(90deg, rgba(139, 63, 174, 0.06), rgba(209, 75, 125, 0.06));
++  border-radius: 8px;
++  padding-left: 10px;
++  padding-right: 10px;
+ }
+ .card-header h2 {
+   font-family: 'DM Serif Display', serif;
+-  font-size: 1.35rem;
++  font-size: 1.5rem;
+   color: var(--text-primary);
+-  font-weight: 400;
++  font-weight: 500;
++  line-height: 1.25;
+ }
+ .card-header p {
+-  font-size: 0.875rem;
++  font-size: 0.94rem;
+   color: var(--text-muted);
+-  margin-top: 3px;
++  margin-top: 6px;
++  line-height: 1.55;
+ }
+ .card-header--row {
+   display: flex;
+@@ -317,15 +335,15 @@ body::before {
+ .form-grid {
+   display: grid;
+   grid-template-columns: 1fr 1fr;
+-  gap: 16px;
+-  margin-bottom: 16px;
++  gap: 18px;
++  margin-bottom: 20px;
+ }
+ .form-group--full { grid-column: 1 / -1; }
+ 
+ .form-group {
+   display: flex;
+   flex-direction: column;
+-  gap: 6px;
++  gap: 8px;
+ }
+ .form-group label {
+   font-size: 12px;
+@@ -335,9 +353,16 @@ body::before {
+   color: var(--text-secondary);
+ }
+ 
++.hint-text {
++  margin-top: 8px;
++  font-size: 0.84rem;
++  color: var(--text-muted);
++}
++
+ .text-input {
+   width: 100%;
+   padding: 12px 15px;
++  min-height: 46px;
+   background: var(--surface-2);
+   border: 1.5px solid var(--border);
+   border-radius: var(--radius-sm);
+@@ -345,18 +370,21 @@ body::before {
+   font-family: 'DM Sans', sans-serif;
+   font-size: 0.95rem;
+   outline: none;
+-  transition: border-color var(--trans), box-shadow var(--trans), background var(--trans);
++  transition: border-color var(--trans), box-shadow var(--trans), background var(--trans), transform var(--trans);
+ }
+ .text-input:focus {
+   border-color: var(--accent);
+-  box-shadow: 0 0 0 3px var(--accent-light);
++  box-shadow: var(--ring);
+   background: var(--surface);
+ }
++.text-input:focus-visible {
++  transform: translateY(-1px);
++}
+ .text-input.input-error {
+   border-color: var(--red);
+   box-shadow: 0 0 0 3px var(--red-bg);
+ }
+-.text-input::placeholder { color: var(--text-muted); }
++.text-input::placeholder { color: #9aa8c2; }
+ 
+ .select-input {
+   cursor: pointer;
+@@ -382,6 +410,40 @@ body::before {
+ }
+ .amount-input { padding-left: 28px; }
+ 
++.participants-grid {
++  display: grid;
++  grid-template-columns: repeat(2, minmax(0, 1fr));
++  gap: 10px;
++}
++
++.participant-chip {
++  display: flex;
++  align-items: center;
++  gap: 10px;
++  padding: 10px 12px;
++  border-radius: var(--radius-sm);
++  border: 1px solid var(--border-soft);
++  background: linear-gradient(135deg, var(--surface-2), var(--surface));
++  cursor: pointer;
++  font-size: 0.92rem;
++}
++
++.participant-chip input {
++  accent-color: var(--accent);
++}
++
++.custom-split-grid {
++  display: grid;
++  grid-template-columns: repeat(2, minmax(0, 1fr));
++  gap: 10px;
++}
++
++.custom-share-item {
++  display: flex;
++  flex-direction: column;
++  gap: 6px;
++}
++
+ input[type="number"]::-webkit-inner-spin-button,
+ input[type="number"]::-webkit-outer-spin-button { opacity: 0; }
+ 
+@@ -390,7 +452,7 @@ input[type="number"]::-webkit-outer-spin-button { opacity: 0; }
+   padding: 12px 22px;
+   border-radius: var(--radius-sm);
+   font-family: 'DM Sans', sans-serif;
+-  font-size: 0.9rem;
++  font-size: 0.92rem;
+   font-weight: 600;
+   cursor: pointer;
+   transition: all var(--trans);
+@@ -401,22 +463,26 @@ input[type="number"]::-webkit-outer-spin-button { opacity: 0; }
+   gap: 6px;
+   white-space: nowrap;
+ }
+-.btn:active { transform: scale(0.97); }
++.btn:active { transform: translateY(0) scale(0.98); }
++.btn:focus-visible {
++  outline: none;
++  box-shadow: var(--ring);
++}
+ 
+ .btn-primary {
+-  background: var(--accent);
++  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+   color: #fff;
+-  box-shadow: 0 2px 8px rgba(26, 107, 107, 0.3);
++  box-shadow: 0 8px 18px rgba(139, 63, 174, 0.28);
+ }
+ .btn-primary:hover {
+-  background: var(--accent-dark);
+-  box-shadow: 0 4px 14px rgba(26, 107, 107, 0.4);
+-  transform: translateY(-1px);
++  background: linear-gradient(135deg, var(--accent-dark), #b13f72);
++  box-shadow: 0 12px 22px rgba(139, 63, 174, 0.34);
++  transform: translateY(-2px);
+ }
+ 
+ .btn-next {
+-  background: var(--text-primary);
+-  color: var(--bg);
++  background: linear-gradient(135deg, var(--accent), var(--accent-2));
++  color: #fff;
+   padding: 13px 28px;
+   font-size: 0.95rem;
+   border-radius: var(--radius-sm);
+@@ -424,31 +490,33 @@ input[type="number"]::-webkit-outer-spin-button { opacity: 0; }
+ }
+ .btn-next:hover:not(:disabled) {
+   transform: translateY(-2px);
+-  box-shadow: var(--shadow-lg);
++  box-shadow: 0 12px 24px rgba(139, 63, 174, 0.34);
+ }
+ .btn-next:disabled {
+-  opacity: 0.35;
++  opacity: 0.45;
+   cursor: not-allowed;
+   transform: none;
+ }
+ 
+ .btn-ghost {
+-  background: transparent;
++  background: linear-gradient(135deg, var(--surface), var(--surface-2));
+   color: var(--text-secondary);
+   border: 1.5px solid var(--border);
+ }
+ .btn-ghost:hover {
+   border-color: var(--accent);
+   color: var(--accent);
++  transform: translateY(-1px);
++  box-shadow: 0 4px 14px rgba(27, 39, 56, 0.08);
+ }
+ 
+ .btn-reset {
+-  background: var(--amber-light);
++  background: linear-gradient(135deg, var(--amber-light), #ffe8cc);
+   color: var(--amber);
+   border: 1.5px solid var(--amber-soft);
+ }
+ .btn-reset:hover {
+-  background: var(--amber);
++  background: linear-gradient(135deg, var(--amber), #f2a44f);
+   color: #fff;
+ }
+ 
+@@ -458,16 +526,16 @@ input[type="number"]::-webkit-outer-spin-button { opacity: 0; }
+ .members-list {
+   display: flex;
+   flex-direction: column;
+-  gap: 8px;
+-  margin-top: 16px;
++  gap: 10px;
++  margin-top: 18px;
+ }
+ 
+ .member-chip {
+   display: flex;
+   align-items: center;
+   gap: 12px;
+-  padding: 11px 14px;
+-  background: var(--surface-2);
++  padding: 12px 14px;
++  background: linear-gradient(135deg, var(--surface-2), var(--surface));
+   border: 1px solid var(--border-soft);
+   border-radius: var(--radius-sm);
+   transition: all var(--trans);
+@@ -481,7 +549,7 @@ input[type="number"]::-webkit-outer-spin-button { opacity: 0; }
+   width: 34px;
+   height: 34px;
+   border-radius: 50%;
+-  background: var(--accent);
++  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+   color: #fff;
+   font-weight: 700;
+   font-size: 14px;
+@@ -516,15 +584,20 @@ input[type="number"]::-webkit-outer-spin-button { opacity: 0; }
+   background: var(--red-bg);
+   color: var(--red);
+ }
++.remove-btn:focus-visible {
++  outline: none;
++  box-shadow: var(--ring);
++}
+ 
+ /* ΓöÇΓöÇΓöÇ Empty State ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ */
+ .empty-state {
+   text-align: center;
+-  padding: 32px 20px;
++  padding: 38px 20px;
+   color: var(--text-muted);
+ }
+ .empty-icon { font-size: 2.4rem; margin-bottom: 10px; }
+ .empty-state p { font-size: 0.9rem; }
++.empty-state p { max-width: 38ch; margin: 0 auto; }
+ 
+ /* ΓöÇΓöÇΓöÇ Error Message ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ */
+ .error-msg {
+@@ -539,6 +612,35 @@ input[type="number"]::-webkit-outer-spin-button { opacity: 0; }
+   animation: slideDown 0.2s ease;
+ }
+ 
++/* ΓöÇΓöÇΓöÇ Utility classes ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ */
++.required::after {
++  content: " *";
++  color: var(--red);
++}
++
++.cat-tag {
++  display: inline-block;
++  padding: 2px 8px;
++  border-radius: var(--radius-sm);
++  background: var(--neutral-bg);
++  color: var(--text-secondary);
++  font-size: 0.75rem;
++  font-weight: 600;
++  margin-left: 6px;
++  border: 1px solid var(--border-soft);
++}
++
++.split-tag {
++  display: inline-block;
++  padding: 2px 8px;
++  border-radius: var(--radius-sm);
++  background: var(--accent-light);
++  color: var(--accent);
++  font-size: 0.72rem;
++  font-weight: 600;
++  border: 1px solid var(--accent-soft);
++}
++
+ /* ΓöÇΓöÇΓöÇ Navigation Bar ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ */
+ .nav-bar {
+   position: fixed;
+@@ -546,13 +648,13 @@ input[type="number"]::-webkit-outer-spin-button { opacity: 0; }
+   left: 0;
+   right: 0;
+   padding: 14px 24px;
+-  background: var(--surface);
++  background: linear-gradient(135deg, var(--surface), var(--surface-2));
+   border-top: 1px solid var(--border-soft);
+   display: flex;
+   justify-content: space-between;
+   align-items: center;
+   z-index: 100;
+-  box-shadow: 0 -4px 20px rgba(26,22,18,0.08);
++  box-shadow: 0 -8px 24px rgba(20, 40, 72, 0.1);
+ }
+ 
+ .member-count-badge {
+@@ -569,25 +671,37 @@ input[type="number"]::-webkit-outer-spin-button { opacity: 0; }
+ .expense-table {
+   width: 100%;
+   border-collapse: collapse;
+-  font-size: 0.9rem;
++  font-size: 0.93rem;
++}
++
++.table-toolbar {
++  display: grid;
++  grid-template-columns: 1fr 220px;
++  gap: 10px;
++  margin-bottom: 12px;
+ }
+ .expense-table th {
+   text-align: left;
+-  padding: 9px 12px;
++  padding: 12px 14px;
+   font-size: 11px;
+-  font-weight: 600;
++  font-weight: 700;
+   text-transform: uppercase;
+   letter-spacing: 0.06em;
+-  color: var(--text-muted);
++  color: var(--text-secondary);
+   border-bottom: 1px solid var(--border-soft);
++  background: linear-gradient(90deg, var(--accent-light), var(--accent-2-light));
+ }
+ .expense-table td {
+-  padding: 12px 12px;
++  padding: 14px 14px;
+   border-bottom: 1px solid var(--border-soft);
+   vertical-align: middle;
+ }
+ .expense-table tr:last-child td { border-bottom: none; }
+ .expense-table tr:hover td { background: var(--surface-2); }
++.expense-table tbody tr { transition: background-color var(--trans); }
++.expense-table tbody tr:focus-within td {
++  background: var(--surface-2);
++}
+ 
+ .td-num { color: var(--text-muted); font-size: 0.82rem; width: 36px; }
+ .td-desc { font-weight: 500; }
+@@ -597,7 +711,7 @@ input[type="number"]::-webkit-outer-spin-button { opacity: 0; }
+   display: inline-block;
+   padding: 3px 10px;
+   border-radius: 99px;
+-  background: var(--accent-light);
++  background: linear-gradient(135deg, var(--accent-light), var(--accent-2-light));
+   color: var(--accent);
+   font-size: 0.82rem;
+   font-weight: 600;
+@@ -608,7 +722,7 @@ input[type="number"]::-webkit-outer-spin-button { opacity: 0; }
+   font-weight: 700;
+   font-size: 1rem;
+   color: var(--accent);
+-  background: var(--accent-light);
++  background: linear-gradient(135deg, var(--accent-light), var(--accent-2-light));
+   border: 1.5px solid var(--accent-soft);
+   border-radius: 99px;
+   padding: 5px 16px;
+@@ -627,12 +741,37 @@ input[type="number"]::-webkit-outer-spin-button { opacity: 0; }
+ @media (max-width: 500px) { .stats-row { grid-template-columns: repeat(2, 1fr); } }
+ 
+ .stat-card {
+-  background: var(--surface);
++  background: linear-gradient(145deg, var(--surface), var(--surface-2));
+   border: 1px solid var(--border-soft);
+   border-radius: var(--radius);
+-  padding: 18px 16px;
++  padding: 20px 18px;
+   text-align: center;
+   box-shadow: var(--shadow);
++  transition: transform var(--trans), box-shadow var(--trans), border-color var(--trans);
++}
++.stat-card:hover {
++  transform: translateY(-2px);
++  box-shadow: var(--shadow-lg);
++  border-color: var(--accent-soft);
++}
++
++.insights-grid {
++  display: grid;
++  grid-template-columns: repeat(3, minmax(0, 1fr));
++  gap: 12px;
++}
++
++.insight-card {
++  border: 1px solid var(--border-soft);
++  border-radius: var(--radius-sm);
++  padding: 14px;
++  background: linear-gradient(145deg, var(--surface), var(--surface-2));
++}
++
++.insight-card p {
++  margin-top: 6px;
++  font-size: 0.85rem;
++  color: var(--text-secondary);
+ }
+ .stat-label {
+   font-size: 11px;
+@@ -666,15 +805,15 @@ input[type="number"]::-webkit-outer-spin-button { opacity: 0; }
+   transition: all var(--trans);
+ }
+ .breakdown-card.balance-pos {
+-  background: var(--green-bg);
++  background: linear-gradient(135deg, var(--green-bg), rgba(76, 205, 150, 0.2));
+   border-color: rgba(30, 122, 74, 0.2);
+ }
+ .breakdown-card.balance-neg {
+-  background: var(--red-bg);
++  background: linear-gradient(135deg, var(--red-bg), rgba(240, 122, 115, 0.2));
+   border-color: rgba(192, 57, 43, 0.2);
+ }
+ .breakdown-card.balance-zero {
+-  background: var(--neutral-bg);
++  background: linear-gradient(135deg, var(--neutral-bg), var(--surface-2));
+   border-color: var(--border-soft);
+ }
+ 
+@@ -711,7 +850,6 @@ input[type="number"]::-webkit-outer-spin-button { opacity: 0; }
+ .balance-zero .bd-status { color: var(--text-muted); }
+ 
+ /* Settlement List */
+-.card--settlement {}
+ 
+ .settlement-list {
+   display: flex;
+@@ -723,7 +861,7 @@ input[type="number"]::-webkit-outer-spin-button { opacity: 0; }
+   display: flex;
+   align-items: center;
+   gap: 12px;
+-  padding: 16px 18px;
++  padding: 18px 18px;
+   background: var(--surface-2);
+   border: 1px solid var(--border-soft);
+   border-radius: var(--radius-sm);
+@@ -731,7 +869,11 @@ input[type="number"]::-webkit-outer-spin-button { opacity: 0; }
+ }
+ .txn:hover {
+   border-color: var(--amber-soft);
+-  background: var(--amber-light);
++  background: linear-gradient(135deg, var(--amber-light), #ffe9ce);
++}
++.txn:focus-within {
++  border-color: var(--accent-soft);
++  box-shadow: var(--ring);
+ }
+ 
+ .txn-from, .txn-to {
+@@ -817,6 +959,11 @@ input[type="number"]::-webkit-outer-spin-button { opacity: 0; }
+ .log-summary::before { content: 'Γû╕'; transition: transform 0.2s; }
+ details[open] .log-summary::before { transform: rotate(90deg); }
+ .log-summary:hover { color: var(--accent); }
++.log-summary:focus-visible {
++  outline: none;
++  box-shadow: var(--ring);
++  border-radius: var(--radius-sm);
++}
+ details .expense-table { margin-top: 16px; }
+ 
+ /* ΓöÇΓöÇΓöÇ Animations ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ */
+@@ -841,13 +988,25 @@ details .expense-table { margin-top: 16px; }
+ /* ΓöÇΓöÇΓöÇ Utilities ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ */
+ .hidden { display: none !important; }
+ 
++/* Respect motion-sensitive users */
++@media (prefers-reduced-motion: reduce) {
++  *, *::before, *::after {
++    animation-duration: 0.01ms !important;
++    animation-iteration-count: 1 !important;
++    transition-duration: 0.01ms !important;
++    scroll-behavior: auto !important;
++  }
++}
++
+ /* ΓöÇΓöÇΓöÇ Responsive ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ */
+ @media (max-width: 480px) {
+-  .page-wrapper { padding: 24px 14px 90px; }
+-  .card { padding: 20px; }
++  .page-wrapper { padding: 24px 14px 94px; }
++  .card { padding: 22px; }
+   .stepper { padding: 12px 16px; }
+   .step-label { display: none; }
+   .form-grid { grid-template-columns: 1fr; }
++  .participants-grid, .custom-split-grid, .insights-grid { grid-template-columns: 1fr; }
++  .table-toolbar { grid-template-columns: 1fr; }
+   .input-row { flex-direction: column; }
+   .nav-bar { padding: 12px 16px; }
+   .card-header--row { flex-direction: column; align-items: stretch; }

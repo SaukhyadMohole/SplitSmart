@@ -38,16 +38,16 @@
 
       <div class="form-grid">
         <div class="form-group">
-          <label for="paidBySelect">Paid by</label>
+          <label for="paidBySelect" class="required">Paid by</label>
           <select id="paidBySelect" class="text-input select-input">
             <option value="">Select member…</option>
           </select>
         </div>
 
         <div class="form-group">
-          <label for="amountInput">Amount (₹)</label>
+          <label for="amountInput" class="required">Amount</label>
           <div class="amount-wrap">
-            <span class="currency-symbol">₹</span>
+            <span class="currency-symbol" id="currSym">₹</span>
             <input
               type="number"
               id="amountInput"
@@ -59,8 +59,18 @@
           </div>
         </div>
 
-        <div class="form-group form-group--full">
-          <label for="descInput">Description</label>
+        <div class="form-group">
+          <label for="categorySelect">Category</label>
+          <select id="categorySelect" class="text-input select-input">
+            <option value="Food">Food</option>
+            <option value="Travel">Travel</option>
+            <option value="Stay">Stay</option>
+            <option value="Misc">Misc</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="descInput" class="required">Description</label>
           <input
             type="text"
             id="descInput"
@@ -69,6 +79,25 @@
             maxlength="60"
             autocomplete="off"
           />
+        </div>
+
+        <div class="form-group form-group--full">
+          <label for="splitTypeSelect">Split mode</label>
+          <select id="splitTypeSelect" class="text-input select-input">
+            <option value="equal">Split equally between selected members</option>
+            <option value="custom">Custom split amounts</option>
+          </select>
+        </div>
+
+        <div class="form-group form-group--full">
+          <label class="required">Split between</label>
+          <div id="participantChecks" class="participants-grid"></div>
+        </div>
+
+        <div class="form-group form-group--full hidden" id="customSplitGroup">
+          <label class="required">Custom amounts</label>
+          <div id="customSplitGrid" class="custom-split-grid"></div>
+          <p id="customSplitHint" class="hint-text"></p>
         </div>
       </div>
 
@@ -79,6 +108,19 @@
       </button>
     </main>
 
+    <!-- Insights Card -->
+    <div class="card">
+      <div class="card-header card-header--row">
+        <div>
+          <h2>Insights</h2>
+          <p>Quick utility stats inspired by Splitwise-style usage.</p>
+        </div>
+      </div>
+      <div id="insightsGrid" class="insights-grid">
+        <!-- JS fills -->
+      </div>
+    </div>
+
     <!-- Expenses Table Card -->
     <div class="card card--table" id="tableCard">
       <div class="card-header card-header--row">
@@ -86,7 +128,17 @@
           <h2>All Expenses</h2>
           <p id="expenseSubtitle">No expenses yet.</p>
         </div>
-        <div class="total-badge" id="totalBadge">Total: ₹0</div>
+        <div class="total-badge" id="totalBadge">Total: 0</div>
+      </div>
+      <div class="table-toolbar">
+        <input id="expenseSearchInput" class="text-input" placeholder="Search by description or payer..." />
+        <select id="expenseFilterCategory" class="text-input select-input">
+          <option value="all">All categories</option>
+          <option value="Food">Food</option>
+          <option value="Travel">Travel</option>
+          <option value="Stay">Stay</option>
+          <option value="Misc">Misc</option>
+        </select>
       </div>
 
       <div id="expenseTableWrap">
@@ -100,6 +152,7 @@
               <th>#</th>
               <th>Description</th>
               <th>Paid by</th>
+              <th>Split</th>
               <th>Amount</th>
               <th></th>
             </tr>
@@ -121,12 +174,25 @@
   <script src="app.js"></script>
   <script>
     // ─── Expenses Page Logic ──────────────────────────────────────────
+    const select = document.getElementById('paidBySelect');
+    const addBtn = document.getElementById('addExpenseBtn');
+    const nextBtn = document.getElementById('nextBtn');
+    const errorEl = document.getElementById('expenseError');
+    const splitTypeSelect = document.getElementById('splitTypeSelect');
+    const participantChecks = document.getElementById('participantChecks');
+    const customSplitGroup = document.getElementById('customSplitGroup');
+    const customSplitGrid = document.getElementById('customSplitGrid');
+    const customSplitHint = document.getElementById('customSplitHint');
+    const searchInput = document.getElementById('expenseSearchInput');
+    const categoryFilter = document.getElementById('expenseFilterCategory');
+    const amountInput = document.getElementById('amountInput');
+
     initStorage();
     guardPage('expenses'); // redirect if no members
+    document.getElementById('currSym').textContent = getCurrency();
+    document.getElementById('totalBadge').textContent = `Total: ${fmt(0)}`;
 
-    // Populate dropdown
     const members = getMembers();
-    const select = document.getElementById('paidBySelect');
     members.forEach(m => {
       const opt = document.createElement('option');
       opt.value = m;
@@ -134,56 +200,140 @@
       select.appendChild(opt);
     });
 
-    // Members pill
     document.getElementById('membersPill').innerHTML =
       members.map(m => `<span class="mpill">${escHtml(m)}</span>`).join('');
 
+    renderParticipantChecks();
+    renderCustomSplitInputs();
+    toggleCustomSplitMode();
     renderExpenses();
 
-    const addBtn = document.getElementById('addExpenseBtn');
-    const nextBtn = document.getElementById('nextBtn');
-    const errorEl = document.getElementById('expenseError');
-
     addBtn.addEventListener('click', addExpense);
-    document.getElementById('amountInput').addEventListener('keydown', e => {
+    amountInput.addEventListener('keydown', e => {
       if (e.key === 'Enter') addExpense();
     });
+    amountInput.addEventListener('input', updateCustomSplitHint);
+    splitTypeSelect.addEventListener('change', () => {
+      toggleCustomSplitMode();
+      updateCustomSplitHint();
+    });
+    participantChecks.addEventListener('change', () => {
+      renderCustomSplitInputs();
+      updateCustomSplitHint();
+    });
+    customSplitGrid.addEventListener('input', updateCustomSplitHint);
+    searchInput.addEventListener('input', renderExpenses);
+    categoryFilter.addEventListener('change', renderExpenses);
     nextBtn.addEventListener('click', () => { window.location.href = 'settlement.html'; });
+
+    function renderParticipantChecks() {
+      participantChecks.innerHTML = members.map((m, i) => `
+        <label class="participant-chip">
+          <input type="checkbox" data-member="${escHtml(m)}" checked>
+          <span>${escHtml(m)}</span>
+        </label>
+      `).join('');
+    }
+
+    function getSelectedParticipants() {
+      return [...participantChecks.querySelectorAll('input[type="checkbox"]:checked')].map(el => el.getAttribute('data-member'));
+    }
+
+    function renderCustomSplitInputs() {
+      const selected = getSelectedParticipants();
+      customSplitGrid.innerHTML = selected.map(name => `
+        <label class="custom-share-item">
+          <span>${escHtml(name)}</span>
+          <input type="number" class="text-input custom-share-input" data-member="${escHtml(name)}" min="0" step="0.01" placeholder="0.00" />
+        </label>
+      `).join('');
+      updateCustomSplitHint();
+    }
+
+    function toggleCustomSplitMode() {
+      customSplitGroup.classList.toggle('hidden', splitTypeSelect.value !== 'custom');
+    }
+
+    function updateCustomSplitHint() {
+      if (splitTypeSelect.value !== 'custom') {
+        customSplitHint.textContent = 'Equal mode: selected members split the amount equally.';
+        return;
+      }
+      const amount = parseFloat(document.getElementById('amountInput').value || 0);
+      const totalCustom = [...customSplitGrid.querySelectorAll('.custom-share-input')]
+        .reduce((sum, input) => sum + parseFloat(input.value || 0), 0);
+      customSplitHint.textContent = `Custom total: ${fmt(totalCustom)}${amount > 0 ? ` / Expense amount: ${fmt(amount)}` : ''}`;
+    }
 
     function addExpense() {
       const paidBy = select.value;
       const amountRaw = document.getElementById('amountInput').value.trim();
+      const category = document.getElementById('categorySelect').value;
       const description = document.getElementById('descInput').value.trim();
+      const splitType = splitTypeSelect.value;
+      const participants = getSelectedParticipants();
 
       if (!paidBy) return showError('Please select who paid.');
       if (!amountRaw || isNaN(amountRaw) || parseFloat(amountRaw) <= 0)
         return showError('Enter a valid amount greater than 0.');
       if (!description) return showError('Please add a description.');
+      if (participants.length === 0) return showError('Select at least one member for split.');
 
       const amount = parseFloat(parseFloat(amountRaw).toFixed(2));
+      const expense = { paidBy, amount, category, description, id: Date.now(), splitType, participants };
+
+      if (splitType === 'custom') {
+        const customShares = {};
+        let customSum = 0;
+        for (const input of customSplitGrid.querySelectorAll('.custom-share-input')) {
+          const name = input.getAttribute('data-member');
+          const value = parseFloat((input.value || '0').trim());
+          const safe = Number.isFinite(value) && value >= 0 ? +value.toFixed(2) : 0;
+          customShares[name] = safe;
+          customSum += safe;
+        }
+        if (Math.abs(customSum - amount) > 0.01) {
+          return showError(`Custom split must total exactly ${fmt(amount)}.`);
+        }
+        expense.customShares = customShares;
+      }
+
       const expenses = getExpenses();
-      expenses.push({ paidBy, amount, description, id: Date.now() });
+      expenses.push(expense);
       saveExpenses(expenses);
 
-      // Reset form
       select.value = '';
       document.getElementById('amountInput').value = '';
       document.getElementById('descInput').value = '';
+      splitTypeSelect.value = 'equal';
+      renderParticipantChecks();
+      renderCustomSplitInputs();
+      toggleCustomSplitMode();
       hideError();
       renderExpenses();
     }
 
     function renderExpenses() {
-      const expenses = getExpenses();
+      const expenses = getExpenses().map(e => normalizeExpense(e, members));
       const tbody = document.getElementById('expenseTableBody');
       const table = document.getElementById('expenseTable');
       const empty = document.getElementById('tableEmpty');
       const badge = document.getElementById('totalBadge');
       const subtitle = document.getElementById('expenseSubtitle');
+      const query = searchInput.value.trim().toLowerCase();
+      const cat = categoryFilter.value;
 
       const total = expenses.reduce((s, e) => s + e.amount, 0);
-      badge.textContent = `Total: ₹${fmt(total)}`;
+      badge.textContent = `Total: ${fmt(total)}`;
       nextBtn.disabled = expenses.length === 0;
+
+      const filtered = expenses.filter(exp => {
+        const inText = !query || exp.description.toLowerCase().includes(query) || exp.paidBy.toLowerCase().includes(query);
+        const inCat = cat === 'all' || (exp.category || 'Misc') === cat;
+        return inText && inCat;
+      });
+
+      renderInsights(expenses);
 
       if (expenses.length === 0) {
         table.classList.add('hidden');
@@ -192,24 +342,50 @@
         return;
       }
 
-      subtitle.textContent = `${expenses.length} expense${expenses.length !== 1 ? 's' : ''} recorded.`;
-      empty.classList.add('hidden');
-      table.classList.remove('hidden');
+      subtitle.textContent = `${filtered.length} of ${expenses.length} expense${expenses.length !== 1 ? 's' : ''}.`;
+      empty.classList.toggle('hidden', filtered.length > 0);
+      table.classList.toggle('hidden', filtered.length === 0);
 
-      tbody.innerHTML = expenses.map((exp, i) => `
+      tbody.innerHTML = filtered.map((exp, i) => `
         <tr class="animate-in" style="animation-delay:${i * 40}ms">
           <td class="td-num">${i + 1}</td>
-          <td class="td-desc">${escHtml(exp.description)}</td>
+          <td class="td-desc">${escHtml(exp.description)} <span class="cat-tag">${escHtml(exp.category || 'Misc')}</span></td>
           <td><span class="payer-tag">${escHtml(exp.paidBy)}</span></td>
-          <td class="td-amount">₹${fmt(exp.amount)}</td>
-          <td><button class="remove-btn" onclick="removeExpense(${i})" title="Delete">✕</button></td>
+          <td><span class="split-tag">${exp.splitType === 'custom' ? 'Custom' : `Equal (${exp.participants.length})`}</span></td>
+          <td class="td-amount">${fmt(exp.amount)}</td>
+          <td><button class="remove-btn" onclick="removeExpense(${exp.id})" title="Delete">✕</button></td>
         </tr>
       `).join('');
     }
 
-    function removeExpense(index) {
+    function renderInsights(expenses) {
+      const grid = document.getElementById('insightsGrid');
+      if (!expenses.length) {
+        grid.innerHTML = `<div class="empty-state"><p>Insights appear once expenses are added.</p></div>`;
+        return;
+      }
+
+      const byCategory = {};
+      expenses.forEach(e => {
+        const key = e.category || 'Misc';
+        byCategory[key] = (byCategory[key] || 0) + e.amount;
+      });
+      const topCategory = Object.entries(byCategory).sort((a, b) => b[1] - a[1])[0];
+      const largestExpense = [...expenses].sort((a, b) => b.amount - a.amount)[0];
+      const avgExpense = expenses.reduce((s, e) => s + e.amount, 0) / expenses.length;
+
+      grid.innerHTML = `
+        <div class="insight-card"><div class="stat-label">Top category</div><div class="stat-value">${escHtml(topCategory[0])}</div><p>${fmt(topCategory[1])}</p></div>
+        <div class="insight-card"><div class="stat-label">Largest expense</div><div class="stat-value">${fmt(largestExpense.amount)}</div><p>${escHtml(largestExpense.description)}</p></div>
+        <div class="insight-card"><div class="stat-label">Average expense</div><div class="stat-value">${fmt(avgExpense)}</div><p>${expenses.length} entries</p></div>
+      `;
+    }
+
+    function removeExpense(expenseId) {
       const expenses = getExpenses();
-      expenses.splice(index, 1);
+      const idx = expenses.findIndex(e => e.id === expenseId);
+      if (idx === -1) return;
+      expenses.splice(idx, 1);
       saveExpenses(expenses);
       renderExpenses();
     }

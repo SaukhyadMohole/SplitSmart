@@ -84,35 +84,32 @@
 
     const members  = getMembers();
     const expenses = getExpenses();
-    const n        = members.length;
     const total    = expenses.reduce((s, e) => s + e.amount, 0);
-    const share    = total / n;
-
-    // ── 1. Build balance map ─────────────────────────────────────
-    const paid = {}; // total paid by each member
-    members.forEach(m => paid[m] = 0);
-    expenses.forEach(e => { paid[e.paidBy] += e.amount; });
-
-    const balance = {}; // positive = owed to them, negative = they owe
-    members.forEach(m => { balance[m] = +(paid[m] - share).toFixed(2); });
+    const perMemberAvg = total / members.length;
+    const { paid, owed, balance, normalizedExpenses } = computeBalances(members, expenses);
 
     // ── 2. Stats Row ─────────────────────────────────────────────
+    const sortedMembers = [...members].sort((a, b) => paid[b] - paid[a]);
+    const highestSpender = sortedMembers[0];
+    const lowestSpender = sortedMembers[sortedMembers.length - 1];
+    const customCount = normalizedExpenses.filter(e => e.splitType === 'custom').length;
+
     document.getElementById('statsRow').innerHTML = `
       <div class="stat-card">
         <div class="stat-label">Total Spent</div>
-        <div class="stat-value">₹${fmt(total)}</div>
+        <div class="stat-value">${fmt(total)}</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">Per Person</div>
-        <div class="stat-value">₹${fmt(share)}</div>
+        <div class="stat-label">Avg / Member</div>
+        <div class="stat-value">${fmt(perMemberAvg)}</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">Members</div>
-        <div class="stat-value">${n}</div>
+        <div class="stat-label">Highest Spender</div>
+        <div class="stat-value" style="font-size:1.15rem; padding-top:6px;">${escHtml(highestSpender)}</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">Expenses</div>
-        <div class="stat-value">${expenses.length}</div>
+        <div class="stat-label">Custom Splits</div>
+        <div class="stat-value" style="font-size:1.15rem; padding-top:6px;">${customCount}</div>
       </div>
     `;
 
@@ -120,14 +117,14 @@
     document.getElementById('breakdownGrid').innerHTML = members.map(m => {
       const b = balance[m];
       const cls = b > 0.005 ? 'balance-pos' : b < -0.005 ? 'balance-neg' : 'balance-zero';
-      const tag = b > 0.005 ? `Receives ₹${fmt(b)}` : b < -0.005 ? `Owes ₹${fmt(Math.abs(b))}` : 'All settled ✓';
+      const tag = b > 0.005 ? `Receives ${fmt(b)}` : b < -0.005 ? `Owes ${fmt(Math.abs(b))}` : 'All settled ✓';
       return `
         <div class="breakdown-card ${cls}">
           <div class="bd-avatar">${m.charAt(0).toUpperCase()}</div>
           <div class="bd-info">
             <div class="bd-name">${escHtml(m)}</div>
-            <div class="bd-paid">Paid ₹${fmt(paid[m])}</div>
-            <div class="bd-share">Share ₹${fmt(share)}</div>
+            <div class="bd-paid">Paid ${fmt(paid[m])}</div>
+            <div class="bd-share">Owes ${fmt(owed[m])}</div>
           </div>
           <div class="bd-status">${tag}</div>
         </div>
@@ -171,7 +168,7 @@
             <span>${escHtml(t.from)}</span>
           </div>
           <div class="txn-arrow">
-            <span class="txn-amount">₹${fmt(t.amt)}</span>
+            <span class="txn-amount">${fmt(t.amt)}</span>
             <div class="arrow-line"><div class="arrow-head">▶</div></div>
           </div>
           <div class="txn-to">
@@ -183,20 +180,21 @@
     }
 
     // ── 6. Expense Log ────────────────────────────────────────────
-    document.getElementById('logBody').innerHTML = expenses.map((e, i) => `
+    document.getElementById('logBody').innerHTML = normalizedExpenses.map((e, i) => `
       <tr>
         <td class="td-num">${i + 1}</td>
-        <td class="td-desc">${escHtml(e.description)}</td>
+        <td class="td-desc">${escHtml(e.description)} <span class="cat-tag">${escHtml(e.category || 'Misc')}</span>
+          <span class="cat-tag">${e.splitType === 'custom' ? 'Custom split' : `Equal split (${e.participants.length})`}</span>
+        </td>
         <td><span class="payer-tag">${escHtml(e.paidBy)}</span></td>
-        <td class="td-amount">₹${fmt(e.amount)}</td>
+        <td class="td-amount">${fmt(e.amount)}</td>
       </tr>
     `).join('');
 
     // ── 7. Reset ──────────────────────────────────────────────────
     document.getElementById('resetBtn').addEventListener('click', () => {
-      if (confirm('Start a new split? All current data will be cleared.')) {
-        sessionStorage.removeItem('members');
-        sessionStorage.removeItem('expenses');
+      if (confirm('Are you absolutely sure you want to start a new split? All current data will be permanently cleared.')) {
+        clearStorage();
         window.location.href = 'index.html';
       }
     });

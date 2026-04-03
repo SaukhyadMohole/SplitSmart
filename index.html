@@ -38,18 +38,31 @@
         <p>Who's sharing expenses on this trip?</p>
       </div>
 
-      <div class="input-row">
-        <input
-          type="text"
-          id="memberInput"
-          class="text-input"
-          placeholder="Enter member name…"
-          maxlength="30"
-          autocomplete="off"
-        />
-        <button class="btn btn-primary" id="addMemberBtn">
-          <span>+ Add</span>
-        </button>
+      <div class="form-group" style="margin-bottom: 16px;">
+        <label>Base Currency</label>
+        <select id="currencySelect" class="text-input select-input">
+          <option value="₹">INR (₹)</option>
+          <option value="$">USD ($)</option>
+          <option value="€">EUR (€)</option>
+          <option value="£">GBP (£)</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label class="required" for="memberInput">Member name</label>
+        <div class="input-row">
+          <input
+            type="text"
+            id="memberInput"
+            class="text-input"
+            placeholder="Enter member name…"
+            maxlength="30"
+            autocomplete="off"
+          />
+          <button class="btn btn-primary" id="addMemberBtn">
+            <span>+ Add</span>
+          </button>
+        </div>
       </div>
 
       <div id="memberError" class="error-msg hidden"></div>
@@ -77,13 +90,17 @@
   <script src="app.js"></script>
   <script>
     // ─── Members Page Logic ───────────────────────────────────────────
-    initStorage();
-    renderMembers();
-
     const memberInput = document.getElementById('memberInput');
     const addBtn = document.getElementById('addMemberBtn');
     const nextBtn = document.getElementById('nextBtn');
     const errorEl = document.getElementById('memberError');
+
+    initStorage();
+    renderMembers();
+
+    const currencySelect = document.getElementById('currencySelect');
+    currencySelect.value = getCurrency();
+    currencySelect.addEventListener('change', e => saveCurrency(e.target.value));
 
     addBtn.addEventListener('click', addMember);
     memberInput.addEventListener('keydown', e => { if (e.key === 'Enter') addMember(); });
@@ -134,10 +151,16 @@
 
     function removeMember(index) {
       const members = getMembers();
+      const memberName = members[index];
       // Check if this member has expenses
-      const expenses = getExpenses();
-      if (expenses.some(e => e.paidBy === members[index])) {
-        showError(`Cannot remove "${members[index]}" — they have recorded expenses.`);
+      const expenses = getExpenses().map(e => normalizeExpense(e, members));
+      const isReferenced = expenses.some(e =>
+        e.paidBy === memberName ||
+        (Array.isArray(e.participants) && e.participants.includes(memberName)) ||
+        (e.customShares && Object.prototype.hasOwnProperty.call(e.customShares, memberName))
+      );
+      if (isReferenced) {
+        showError(`Cannot remove "${memberName}" — they are referenced in recorded expenses.`);
         return;
       }
       members.splice(index, 1);
